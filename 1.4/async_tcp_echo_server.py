@@ -1,37 +1,46 @@
-import asyncio
-import logging
-from datetime import datetime
-import signal
+#!/usr/bin/env python3
+"""
+Lab 1.4: Async TCP Echo Server
+Convert Lab 1.1 to async version using asyncio.start_server()
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+Features:
+- Handle 100+ concurrent connections
+- Async I/O operations
+- Connection timeout (30s idle)
+- Graceful shutdown
+- Metrics tracking
+"""
+
+import asyncio
+import sys
+from datetime import datetime
+
 
 class AsyncEchoServer:
-    def __init__(self, host='localhost', port=9999, idle_timeout=30):
+    """Async TCP Echo Server with metrics"""
+    
+    def __init__(self, host='0.0.0.0', port=9999, timeout=30):
         self.host = host
         self.port = port
-        self.idle_timeout = idle_timeout
-        
-        # Metrics
-        self.total_requests = 0
+        self.idle_timeout = timeout
         self.active_connections = 0
+        self.total_requests = 0
+        self.bytes_received = 0
         self.server = None
-        self.shutdown_event = asyncio.Event()
     
     async def handle_client(self, reader, writer):
-        """Handle async client connection with timeout"""
-        client_addr = writer.get_extra_info('peername')
+        """
+        Handle single client connection asynchronously
+        With 30s idle timeout
+        """
+        addr = writer.get_extra_info('peername')
         self.active_connections += 1
         
-        logger.info(f"Client connected: {client_addr[0]}:{client_addr[1]} "
-                   f"(Active: {self.active_connections})")
+        print(f"[{self._timestamp()}] ✅ Client connected: {addr} "
+              f"(Active: {self.active_connections})")
         
         try:
-            while not self.shutdown_event.is_set():
+            while True:
                 try:
                     # Read with timeout for idle connection detection
                     data = await asyncio.wait_for(
@@ -40,87 +49,103 @@ class AsyncEchoServer:
                     )
                     
                     if not data:
-                        logger.info(f"Client {client_addr[0]} closed connection")
                         break
                     
-                    message = data.decode('utf-8').strip()
+                    message = data.decode('utf-8', errors='replace').strip()
                     self.total_requests += 1
-                    logger.info(f"Request #{self.total_requests} from {client_addr[0]}: {message}")
+                    self.bytes_received += len(data)
                     
-                    # Echo back with prefix
+                    print(f"[{self._timestamp()}] 📥 {addr}: {message} "
+                          f"(Request #{self.total_requests})")
+                    
+                    # Echo back
                     response = f"ECHO: {message}".encode('utf-8')
                     writer.write(response)
                     await writer.drain()
-                    logger.info(f"Sent to {client_addr[0]}: {response.decode()}")
+                    
+                    print(f"[{self._timestamp()}] 📤 Echo sent to {addr}")
                 
                 except asyncio.TimeoutError:
-                    logger.warning(f"Client {client_addr[0]} idle timeout ({self.idle_timeout}s)")
+                    print(f"[{self._timestamp()}] ⏱️  Timeout: {addr} idle >{self.idle_timeout}s")
                     break
         
         except Exception as e:
-            logger.error(f"Error handling client {client_addr[0]}: {str(e)}")
+            print(f"[{self._timestamp()}] ❌ Error with {addr}: {e}")
+        
         finally:
-            writer.close()
-            await writer.wait_closed()
             self.active_connections -= 1
-            logger.info(f"Connection closed with {client_addr[0]}. "
-                       f"Active: {self.active_connections}")
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except:
+                pass
+            
+            print(f"[{self._timestamp()}] 🔌 Disconnected: {addr} "
+                  f"(Active: {self.active_connections})")
     
-    async def print_metrics(self):
-        """Periodically print server metrics"""
-        while not self.shutdown_event.is_set():
+    async def print_metrics_periodic(self):
+        """Periodically print server metrics (every 10 seconds)"""
+        while True:
             try:
                 await asyncio.sleep(10)
-                logger.info(f"=== METRICS === Total Requests: {self.total_requests} | "
-                           f"Active Connections: {self.active_connections}")
+                self.print_metrics()
             except asyncio.CancelledError:
                 break
     
-    def handle_signal(self, sig):
-        """Handle shutdown signal"""
-        logger.info(f"Received signal {sig}. Starting graceful shutdown...")
-        self.shutdown_event.set()
+    def print_metrics(self):
+        """Print current server metrics"""
+        print(f"\n[{self._timestamp()}] 📊 Server Metrics:")
+        print(f"   ├─ Total Requests: {self.total_requests}")
+        print(f"   ├─ Active Connections: {self.active_connections}")
+        print(f"   └─ Bytes Received: {self.bytes_received / 1024:.1f} KB")
     
-    async def run(self):
-        """Start server with graceful shutdown"""
-        self.server = await asyncio.start_server(
-            self.handle_client,
-            self.host,
-            self.port
-        )
+    async def start(self):
+        """Start server and handle graceful shutdown"""
+        try:
+            self.server = await asyncio.start_server(
+                self.handle_client,
+                self.host,
+                self.port
+            )
+            
+            print(f"\n{'='*60}")
+            print(f"🚀 Async Echo Server Started!")
+            print(f"   Host: {self.host}")
+            print(f"   Port: {self.port}")
+            print(f"   Idle Timeout: {self.idle_timeout}s")
+            print(f"   Can handle 100+ concurrent connections")
+            print(f"{'='*60}\n")
+            
+            # Start metrics printer
+            metrics_task = asyncio.create_task(self.print_metrics_periodic())
+            
+            async with self.server:
+                await self.server.serve_forever()
         
-        logger.info(f"Async Echo Server listening on {self.host}:{self.port}")
-        logger.info(f"Idle timeout: {self.idle_timeout}s | Max concurrent: 100+")
-        
-        # Setup signal handlers
-        loop = asyncio.get_event_loop()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, self.handle_signal, sig)
-        
-        # Start metrics printer
-        metrics_task = asyncio.create_task(self.print_metrics())
-        
-        async with self.server:
-            try:
-                # Serve until shutdown
-                while not self.shutdown_event.is_set():
-                    await asyncio.sleep(0.1)
-            except Exception as e:
-                logger.error(f"Server error: {str(e)}")
-            finally:
-                metrics_task.cancel()
-                try:
-                    await metrics_task
-                except asyncio.CancelledError:
-                    pass
-                
-                logger.info(f"Server shutdown. Final metrics: "
-                           f"Total Requests: {self.total_requests}, "
-                           f"Active Connections: {self.active_connections}")
+        except KeyboardInterrupt:
+            pass
+        except OSError as e:
+            print(f"❌ Failed to start server: {e}")
+            sys.exit(1)
+        finally:
+            print(f"\n[{self._timestamp()}] 🛑 Shutting down...")
+            self.print_metrics()
+            print(f"[{self._timestamp()}] ✓ Server stopped")
+    
+    @staticmethod
+    def _timestamp():
+        """Return formatted timestamp"""
+        return datetime.now().strftime("%H:%M:%S")
+
 
 async def main():
-    server = AsyncEchoServer(host='localhost', port=9999, idle_timeout=30)
-    await server.run()
+    """Main entry point"""
+    server = AsyncEchoServer(host='0.0.0.0', port=9999, timeout=30)
+    await server.start()
 
-if __name__ == "__main__":
-    asyncio.run(main())
+
+if __name__ == '__main__':
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n[*] Server shutdown")

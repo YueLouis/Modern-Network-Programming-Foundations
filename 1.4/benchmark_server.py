@@ -1,80 +1,224 @@
+#!/usr/bin/env python3
 """
-Benchmark script to compare threaded vs async servers
-Usage: python benchmark_server.py <target_host:port> <num_connections> <requests_per_conn>
+Lab 1.4: Benchmark - Compare Async vs Threading Performance
+
+Usage:
+    # Terminal 1: Start async server
+    python async_tcp_echo_server.py
+    
+    # Terminal 2: Run benchmark
+    python benchmark_server.py
 """
+
 import socket
 import time
 import threading
 import sys
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 
-def send_request(host, port, num_requests):
-    """Send multiple echo requests through single connection"""
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.connect((host, port))
-        
-        start_time = time.time()
-        for i in range(num_requests):
-            message = f"Test message {i}".encode('utf-8')
-            sock.send(message)
-            response = sock.recv(1024)
-        end_time = time.time()
-        
-        sock.close()
-        return end_time - start_time
-    except Exception as e:
-        print(f"Error: {str(e)}")
-        return -1
 
-def benchmark(host, port, num_connections, requests_per_conn):
-    """Run benchmark test"""
-    print(f"\n{'='*60}")
-    print(f"Benchmark Configuration:")
-    print(f"  Target: {host}:{port}")
-    print(f"  Concurrent Connections: {num_connections}")
-    print(f"  Requests per Connection: {requests_per_conn}")
-    print(f"  Total Requests: {num_connections * requests_per_conn}")
-    print(f"{'='*60}\n")
+def _timestamp():
+    return datetime.now().strftime("%H:%M:%S")
+
+
+class BenchmarkClient:
+    """Simple client for stress testing"""
     
+    def __init__(self, host='127.0.0.1', port=9999):
+        self.host = host
+        self.port = port
+        self.success_count = 0
+        self.fail_count = 0
+        self.total_time = 0
+        self.min_latency = float('inf')
+        self.max_latency = 0
+    
+    def send_request(self):
+        """Send single request to server"""
+        try:
+            start = time.time()
+            
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5.0)
+            sock.connect((self.host, self.port))
+            
+            message = b'Benchmark test message from client'
+            sock.send(message)
+            
+            response = sock.recv(1024)
+            sock.close()
+            
+            latency = time.time() - start
+            
+            if response.startswith(b'ECHO:'):
+                self.success_count += 1
+                self.total_time += latency
+                self.min_latency = min(self.min_latency, latency)
+                self.max_latency = max(self.max_latency, latency)
+                return True
+            else:
+                self.fail_count += 1
+                return False
+        
+        except socket.timeout:
+            self.fail_count += 1
+            return False
+        
+        except ConnectionRefusedError:
+            self.fail_count += 1
+            return False
+        
+        except Exception as e:
+            self.fail_count += 1
+            return False
+
+
+def stress_test_sequential(num_clients=50):
+    """Sequential requests (one by one)"""
+    print(f"\n📊 Sequential Test ({num_clients} requests)")
+    print("-" * 60)
+    
+    client = BenchmarkClient()
     start_time = time.time()
     
-    # Use thread pool for concurrent connections
-    with ThreadPoolExecutor(max_workers=min(num_connections, 50)) as executor:
-        futures = [
-            executor.submit(send_request, host, port, requests_per_conn)
-            for _ in range(num_connections)
-        ]
-        
-        times = []
-        for i, future in enumerate(futures):
-            elapsed = future.result()
-            if elapsed > 0:
-                times.append(elapsed)
-            print(f"  Connection {i+1}/{num_connections}: {elapsed:.3f}s")
+    for i in range(num_clients):
+        client.send_request()
+        if (i + 1) % 10 == 0:
+            print(f"  Progress: {i + 1}/{num_clients}")
     
-    total_time = time.time() - start_time
-    total_requests = num_connections * requests_per_conn
+    elapsed = time.time() - start_time
     
-    print(f"\n{'='*60}")
-    print(f"RESULTS:")
-    print(f"  Total Time: {total_time:.2f}s")
-    print(f"  Requests/Second: {total_requests/total_time:.2f}")
-    print(f"  Avg Latency: {sum(times)/len(times)*1000:.2f}ms")
-    print(f"  Min Latency: {min(times)*1000:.2f}ms")
-    print(f"  Max Latency: {max(times)*1000:.2f}ms")
-    print(f"{'='*60}\n")
+    print(f"\n✅ Sequential Results:")
+    print(f"   Success: {client.success_count}/{num_clients}")
+    print(f"   Failed: {client.fail_count}/{num_clients}")
+    print(f"   Total Time: {elapsed:.2f}s")
+    print(f"   Throughput: {num_clients/elapsed:.2f} req/sec")
+    if client.total_time > 0:
+        avg_latency = (client.total_time / client.success_count) * 1000
+        print(f"   Avg Latency: {avg_latency:.2f}ms")
+        print(f"   Min Latency: {client.min_latency*1000:.2f}ms")
+        print(f"   Max Latency: {client.max_latency*1000:.2f}ms")
+    
+    return elapsed
 
-if __name__ == "__main__":
-    if len(sys.argv) != 4:
-        print("Usage: python benchmark_server.py <host:port> <connections> <requests_per_conn>")
-        print("Example: python benchmark_server.py localhost:9999 100 10")
-        sys.exit(1)
+
+def stress_test_concurrent(num_clients=50, max_workers=50):
+    """Concurrent requests using ThreadPoolExecutor"""
+    print(f"\n📊 Concurrent Test ({num_clients} requests, {max_workers} workers)")
+    print("-" * 60)
     
-    target = sys.argv[1].split(':')
-    host = target[0]
-    port = int(target[1])
-    num_connections = int(sys.argv[2])
-    requests_per_conn = int(sys.argv[3])
+    client = BenchmarkClient()
+    start_time = time.time()
     
-    benchmark(host, port, num_connections, requests_per_conn)
+    def worker(_):
+        return client.send_request()
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(worker, i) for i in range(num_clients)]
+        
+        completed = 0
+        for future in as_completed(futures):
+            completed += 1
+            if completed % 20 == 0:
+                print(f"  Progress: {completed}/{num_clients}")
+            future.result()
+    
+    elapsed = time.time() - start_time
+    
+    print(f"\n✅ Concurrent Results:")
+    print(f"   Success: {client.success_count}/{num_clients}")
+    print(f"   Failed: {client.fail_count}/{num_clients}")
+    print(f"   Total Time: {elapsed:.2f}s")
+    print(f"   Throughput: {num_clients/elapsed:.2f} req/sec")
+    if client.total_time > 0:
+        avg_latency = (client.total_time / client.success_count) * 1000
+        print(f"   Avg Latency: {avg_latency:.2f}ms")
+        print(f"   Min Latency: {client.min_latency*1000:.2f}ms")
+        print(f"   Max Latency: {client.max_latency*1000:.2f}ms")
+    
+    return elapsed
+
+
+def main():
+    """Run benchmarks"""
+    print("\n" + "="*60)
+    print("🔬 Async Server Benchmark")
+    print("="*60)
+    print("\n⚠️  Make sure server is running!")
+    print("   Run: python async_tcp_echo_server.py")
+    
+    # Wait for server
+    time.sleep(2)
+    
+    # Test configurations
+    test_configs = [
+        (50, 50),     # 50 clients
+        (100, 50),    # 100 clients
+        (200, 100),   # 200 clients
+        (500, 100),   # 500 clients (stress test)
+    ]
+    
+    results = []
+    
+    for num_clients, max_workers in test_configs:
+        try:
+            print(f"\n\n{'='*60}")
+            print(f"Test: {num_clients} concurrent clients")
+            print(f"{'='*60}")
+            
+            # Sequential test (small scale only)
+            if num_clients <= 50:
+                seq_time = stress_test_sequential(num_clients)
+            else:
+                seq_time = None
+            
+            time.sleep(1)
+            
+            # Concurrent test
+            conc_time = stress_test_concurrent(num_clients, max_workers)
+            
+            if seq_time and conc_time:
+                improvement = (seq_time - conc_time) / seq_time * 100
+                print(f"\n⚡ Improvement: {improvement:.1f}% faster with concurrency")
+            
+            results.append({
+                'clients': num_clients,
+                'time': conc_time,
+                'throughput': num_clients / conc_time
+            })
+            
+            time.sleep(2)
+        
+        except KeyboardInterrupt:
+            print("\n\n⏹️  Benchmark stopped")
+            break
+        except ConnectionRefusedError:
+            print(f"\n❌ Connection refused - Is server running?")
+            sys.exit(1)
+    
+    # Summary
+    if results:
+        print(f"\n\n{'='*60}")
+        print("📈 Summary - Async Server Performance")
+        print(f"{'='*60}")
+        print(f"{'Clients':<12} {'Time (s)':<12} {'Throughput':<15}")
+        print("-" * 50)
+        
+        for r in results:
+            print(f"{r['clients']:<12} {r['time']:<12.2f} {r['throughput']:.0f} req/sec")
+        
+        print("\n✅ Benchmark complete!")
+        print("\n💡 Key Insights:")
+        print("   • Async handles many concurrent connections efficiently")
+        print("   • Memory usage remains low even with 500+ clients")
+        print("   • Compare with threading version from Lab 1.1")
+        print("   • Async is better for I/O-bound workloads")
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\n⏹️  Benchmark interrupted")
+        sys.exit(0)

@@ -48,8 +48,8 @@ class HTTPTrafficAnalyzer:
             ip_layer = packet[IP]
             tcp_layer = packet[TCP]
             
-            # Check for HTTP traffic (port 80)
-            if tcp_layer.dport == 80 or tcp_layer.sport == 80:
+            # Check for HTTP traffic (port 80 or 8080)
+            if tcp_layer.dport in [80, 8080] or tcp_layer.sport in [80, 8080]:
                 
                 # Check for payload
                 if packet.haslayer(Raw):
@@ -58,7 +58,7 @@ class HTTPTrafficAnalyzer:
                     
                     if host:
                         logger.info(f"HTTP Request: {ip_layer.src}:{tcp_layer.sport} → "
-                                   f"{ip_layer.dst}:80")
+                                   f"{ip_layer.dst}:{tcp_layer.dport}")
                         logger.info(f"  Host: {host}")
                         
                         self.http_requests.append({
@@ -70,16 +70,16 @@ class HTTPTrafficAnalyzer:
     
     def analyze(self):
         """Start packet capture and analysis"""
-        logger.info(f"\nCapturing {self.packet_count} packets on port 80...")
+        logger.info(f"\nCapturing {self.packet_count} packets on port 80 and 8080...")
         logger.info("(Make HTTP requests to see traffic)\n")
         logger.info("="*60)
         
         try:
             sniff(
-                filter="tcp port 80",
+                filter="tcp port 80 or tcp port 8080",
                 prn=self.packet_callback,
                 count=self.packet_count,
-                timeout=30
+                timeout=120
             )
         except PermissionError:
             logger.error("Error: Requires administrator/root privileges to capture packets")

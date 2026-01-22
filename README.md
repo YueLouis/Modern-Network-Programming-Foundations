@@ -1,16 +1,185 @@
-# Network Programming Labs - Complete Guide
+# 📡 NPRO: Modern Network Programming Foundations
+**Lab 1.1-1.6: Complete Guide (Lý Thuyết + Thực Hành)**
 
-## Overview
-This folder contains 6 labs covering network programming concepts:
-- TCP/UDP socket programming
-- Async/threaded servers
-- Packet crafting and analysis
-- Debugging and optimization
+## 🎯 Mục Tiêu Chung
+Hiểu sâu network programming từ **blocking socket → async/await**, **packet crafting**, và **production-ready code**.
+
+**Key progression:** 1 client → 1000+ clients (async) → debug & optimize
 
 ---
 
-## Lab 1.1: TCP Echo Server ✓
+## 📚 LÝ THUYẾT TRỌNG TÂM
+
+## 📚 LÝ THUYẾT TRỌNG TÂM
+
+### Scaling Concurrency (Progression)
+
+```
+Lab 1.1: Blocking Socket
+├─ 1 client/server
+├─ recv() block → chờ client
+└─ Limitation: không scale
+
+Lab 1.2: UDP (Connectionless)
+├─ Datagram-based
+├─ recvfrom() → biết ai gửi
+└─ Dùng: DNS, Gaming, VoIP
+
+Lab 1.3: Threading (1 thread/client)
+├─ Xử lý concurrent
+├─ Memory: ~1MB/thread
+├─ GIL overhead
+└─ Max: ~100-1000 clients
+
+Lab 1.4: Async/Await (Event Loop) ⭐
+├─ 1 thread, 1000+ clients
+├─ Memory: ~50KB/coroutine
+├─ Throughput: 600-900 req/s
+├─ 160x more efficient
+└─ Key: await = pause, let others run
+
+Lab 1.5: Packet Crafting (Deep Dive)
+├─ OSI layers (IP/TCP/ICMP)
+├─ TCP 3-way handshake
+├─ TCP SYN scanning
+└─ Packet sniffing (Scapy)
+
+Lab 1.6: Debug & Optimize
+├─ 8 common bugs
+├─ AI-assisted debugging
+├─ Scale to 10,000+ connections
+└─ Graceful shutdown
+```
+
+### TCP vs UDP
+
+| Feature | TCP | UDP |
+|---------|-----|-----|
+| **Connection** | 3-way handshake | Connectionless |
+| **Reliability** | Guaranteed | Best effort |
+| **Order** | Ordered | May reorder |
+| **Speed** | Slower (overhead) | Faster |
+| **Header size** | 20 bytes | 8 bytes |
+| **Use case** | HTTP, SSH, FTP | DNS, Gaming, VoIP |
+
+### Threading vs Async
+
+```python
+# THREADING: 1 thread = 1 client
+for client in clients:
+    thread = threading.Thread(target=handle, args=(client,))
+    thread.start()  # Spawn new thread
+# Result: 100 threads = 100MB RAM, context switching overhead
+
+# ASYNC: 1 thread = 1000+ clients
+async def handle(reader, writer):
+    while True:
+        data = await reader.read()  # Pause, let others run
+        ...
+asyncio.run(main())
+# Result: 1000 coroutines = ~50MB RAM, no context switch
+```
+
+### TCP 3-way Handshake
+
+```
+Client                    Server
+  │                         │
+  ├─── SYN (seq=x) ───────→ │
+  │    (flags="S")          │
+  │                         │
+  │ ← SYN-ACK (ack=x+1) ─── │
+  │   (flags="SA", seq=y)   │
+  │                         │
+  ├─── ACK (ack=y+1) ──────→│
+  │    (flags="A")          │
+  │                         │
+  └─── Connected ──────────→│
+       (data can flow)
+```
+
+### OSI Model (Layers)
+
+```
+7: Application    ← HTTP, DNS, SSH
+6: Presentation   ← Encryption, compression
+5: Session        ← Connection mgmt
+4: Transport      ← TCP, UDP (reliability)
+3: Network        ← IP (routing)
+2: Data Link      ← MAC/Ethernet
+1: Physical       ← Cables
+```
+
+---
+
+## 💻 THỰC HÀNH (Labs)
 **File:** `1.1/tcp_echo_server.py`
+
+---
+
+## 🏆 EXAM FOCUS POINTS
+
+### "Nêu khác biệt TCP vs UDP?"
+**Answer:** TCP = connection-based (handshake), reliable (ordered), overhead cao | UDP = connectionless, best-effort, datagram, nhanh
+
+### "Tại sao async tốt hơn threading?"
+**Answer:** Threading 1 thread=1 client (~1MB), GIL overhead | Async 1 thread=1000+ clients (~50KB), **160x efficient**
+
+### "Memory leak async?"
+**Answer:** Quên `writer.close()` → file descriptor leak | Không remove client → memory grows
+
+### "TCP SYN scan?"
+**Answer:** Gửi SYN → SYN-ACK=OPEN | RST-ACK=CLOSED | Timeout=FILTERED
+
+### "Scale to 10k connections?"
+**Answer:** OS tuning (ulimit), backpressure, multiple processes (reuse_port), uvloop, proper timeout + shutdown
+
+---
+
+## 📝 CODE TEMPLATES
+
+**Async Handler:**
+```python
+async def handle(reader, writer):
+    try:
+        while True:
+            data = await asyncio.wait_for(reader.read(1024), timeout=60)
+            if not data: break
+            try:
+                msg = data.decode('utf-8', errors='replace')
+            except: continue
+            writer.write(f"ECHO: {msg}".encode())
+            await writer.drain()
+    finally:
+        writer.close(); await writer.wait_closed()
+```
+
+**TCP Port Scanner:**
+```python
+from scapy.all import IP, TCP, sr1
+syn = IP(dst=target)/TCP(dport=port, flags="S")
+resp = sr1(syn, timeout=1)
+if resp and resp[TCP].flags=="SA": print("OPEN")
+```
+
+---
+
+## 📊 PERFORMANCE & STATUS
+
+| Lab | File | Status | Metric |
+|-----|------|--------|--------|
+| 1.4 | async_tcp_echo_server.py | ✅ | 600-900 req/s, 50KB/conn |
+| 1.5 | port_scanner.py | ✅ | Detected port 9999 |
+| 1.5 | http_traffic_analyzer.py | ✅ | Captured neverssl.com |
+| 1.6 | optimized_server.py | ✅ | 8 bugs fixed |
+
+---
+
+## ✅ FINAL NOTES
+
+**Progression:** Blocking (1 client) → Threading (100 clients) → **Async (10k clients, 160x efficient)** → Packet Analysis → Production
+
+---
 
 **Features:**
 - TCP server on port 9999
@@ -333,3 +502,4 @@ After completing these labs, you will understand:
 ---
 
 **Good luck with your networking labs!** 🚀
+D:

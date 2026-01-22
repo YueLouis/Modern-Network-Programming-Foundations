@@ -10,8 +10,6 @@ Hiểu sâu network programming từ **blocking socket → async/await**, **pack
 
 ## 📚 LÝ THUYẾT TRỌNG TÂM
 
-## 📚 LÝ THUYẾT TRỌNG TÂM
-
 ### Scaling Concurrency (Progression)
 
 ```
